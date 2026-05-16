@@ -34,6 +34,7 @@ struct Register {
 struct ReservationStation {
     RsType rsType;
     bool busy;
+    bool executed;
 
     OpCode op;
 
@@ -47,7 +48,7 @@ struct ReservationStation {
     //int instructionId;
 
     ReservationStation()
-        : rsType(lsType), busy(false), op(NOP), Val1(0), Val2(0), Rs1({-1, lsType}), Rs2({-1, lsType}), dst(0) { }
+        : rsType(lsType), busy(false), executed(false), op(NOP), Val1(0), Val2(0), Rs1({-1, lsType}), Rs2({-1, lsType}), dst(0) { }
 };
 
 struct FunctionalUnit {
@@ -78,6 +79,7 @@ int ic = 0;
 int cdbIndex{ 0 };
 int alubuffer{ -1 };
 std::pair<int, RsType> oldAluProducerRs;
+std::pair<int, RsType> oldLsProducerRs;
 int aluDelay{ 0 };
 int lsDelay{ 0 };
 
@@ -90,13 +92,14 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
             cdb[cdbIndex].value = alubuffer;
             cdb[cdbIndex].valid = true;
             cdb[cdbIndex].producer = oldAluProducerRs;
+            alu_rs[oldAluProducerRs.first].busy = false; //Free the old Rs, so that it wont be executed again
             cdbIndex++;
         }
 
         switch (rs.op)
         {
         case ADD: { alubuffer = rs.Val1 + rs.Val2; aluDelay = 0; break; } //Takt
-        case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = 0; break; } //Takt
+        case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = 0; std::cout << "\nTest: " << alubuffer; break; } //Takt
         case MUL: { alubuffer = rs.Val1 * rs.Val2; aluDelay = 2; break; } //Takt//Takt//Takt
         case DIV: { alubuffer = rs.Val1 / rs.Val2; aluDelay = 4; break; } //Takt//Takt//Takt//Takt//Takt
         default: break;
@@ -112,12 +115,14 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
 void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase included
     if (lsDelay == 0)
     {
+        ls_rs[oldLsProducerRs.first].busy = false; //Free the old Rs, so that it wont be executed again
         switch (rs.op)
         {
         case LOAD: { cdb[cdbIndex].value = ram[rs.Val1 + rs.Val2]; cdb[cdbIndex].valid = true; cdb[cdbIndex].producer = prodRs; cdbIndex++; break; } //Takt//Takt
         case STORE: { ram[rs.Val1 + rs.Val2] = reg[rs.dst].value; reg[rs.dst].busy = false; break; } //Takt//Takt
         default: break;
         }
+        oldLsProducerRs = prodRs;
         lsDelay = 1;
     }
     else
@@ -131,7 +136,7 @@ void initStorage(Register* reg) {
     {
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_int_distribution<> distrib(0, 255);
+        std::uniform_int_distribution<> distrib(0, 15);
         reg[i].value = distrib(gen);
         reg[i].busy = false;
         reg[i].producerRS = {-1, lsType};
@@ -243,7 +248,7 @@ void execute() {
     }
 }
 
-bool mem() { //Currently implemented in ls(), dont know if its necesarry
+bool mem() { //Currently implemented in ls(), dont know if its necessary
     return true;
 }
 
@@ -271,9 +276,9 @@ void writeBack() {
 int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtsschritte zu machen
     int inputCycles{ 0 };
     int cycles{ 0 };
-    Instruction ins1(LOAD, 5, 1, 2); //hat random Wert gespeichert
+    Instruction ins1(LOAD, 5, 1, 2); //funzt
     Instruction ins2(ADD, 4, 5, 2); //funzt
-    Instruction ins3(SUB, 6, 7, 8); //macht gar nix
+    Instruction ins3(SUB, 6, 7, 8); //Läd erst das Ergebnis des vorherigen Befehls, bevor es das korrekte läd
 
     initStorage(reg);
 
@@ -286,9 +291,15 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
 
     while (true)
     {
+        std::cout << "\nREG: ";
         for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
         {
             std::cout << reg[i].value << " ";
+        }
+        std::cout << "\nRAM: ";
+        for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
+        {
+            std::cout << ram[i] << " ";
         }
         std::cout << "\n+1 or +5 cycles? ";
         std::cin >> inputCycles;
