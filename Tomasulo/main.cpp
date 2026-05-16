@@ -79,7 +79,6 @@ int ic = 0;
 int cdbIndex{ 0 };
 int alubuffer{ -1 };
 std::pair<int, RsType> oldAluProducerRs;
-std::pair<int, RsType> oldLsProducerRs;
 int aluDelay{ 0 };
 int lsDelay{ 0 };
 
@@ -87,21 +86,21 @@ int lsDelay{ 0 };
 void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
     if (aluDelay == 0)
     {
-        if (alubuffer != -1)
+        if (alubuffer != -1 && oldAluProducerRs.first > -1)
         {
             cdb[cdbIndex].value = alubuffer;
             cdb[cdbIndex].valid = true;
             cdb[cdbIndex].producer = oldAluProducerRs;
-            alu_rs[oldAluProducerRs.first].busy = false; //Free the old Rs, so that it wont be executed again
             cdbIndex++;
         }
 
         switch (rs.op)
         {
         case ADD: { alubuffer = rs.Val1 + rs.Val2; aluDelay = 0; break; } //Takt
-        case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = 0; std::cout << "\nTest: " << alubuffer; break; } //Takt
+        case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = 0; break; } //Takt
         case MUL: { alubuffer = rs.Val1 * rs.Val2; aluDelay = 2; break; } //Takt//Takt//Takt
         case DIV: { alubuffer = rs.Val1 / rs.Val2; aluDelay = 4; break; } //Takt//Takt//Takt//Takt//Takt
+        case NOP: { break; } //So that we can save the last value
         default: break;
         }
         oldAluProducerRs = prodRs; //Remember it to write on it after the delay
@@ -115,14 +114,13 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
 void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase included
     if (lsDelay == 0)
     {
-        ls_rs[oldLsProducerRs.first].busy = false; //Free the old Rs, so that it wont be executed again
         switch (rs.op)
         {
         case LOAD: { cdb[cdbIndex].value = ram[rs.Val1 + rs.Val2]; cdb[cdbIndex].valid = true; cdb[cdbIndex].producer = prodRs; cdbIndex++; break; } //Takt//Takt
         case STORE: { ram[rs.Val1 + rs.Val2] = reg[rs.dst].value; reg[rs.dst].busy = false; break; } //Takt//Takt
+        case NOP: { break; }
         default: break;
         }
-        oldLsProducerRs = prodRs;
         lsDelay = 1;
     }
     else
@@ -182,7 +180,11 @@ bool instructionFetchDecode() {
             rs[j].busy = true;
             rs[j].op = i.op;
             rs[j].dst = i.dst;
-            if (reg[i.src1].producerRS.first == -1) //Prüfen, ob Werte verfügbar sind
+            if (rs->rsType == lsType) //Check if val1 needs to be offset or registervalue
+            {
+                rs[j].Val1 = i.src1;
+            }
+            else if (reg[i.src1].producerRS.first == -1) //Check if value is available
             {
                 rs[j].Val1 = reg[i.src1].value;
             }
@@ -191,7 +193,7 @@ bool instructionFetchDecode() {
                 rs[j].Rs1 = reg[i.src1].producerRS;
             }
 
-            if (reg[i.src2].producerRS.first == -1) //Prüfen, ob Werte verfügbar sind
+            if (reg[i.src2].producerRS.first == -1) //Check if value is available
             {
                 rs[j].Val2 = reg[i.src2].value;
             }
@@ -208,9 +210,10 @@ bool instructionFetchDecode() {
 
 void execute() {
     int rsIndex{ 0 };
+    bool done{ false };
     for (ReservationStation& rs : ls_rs)
     {
-        if (rs.busy)
+        if (rs.busy && !rs.executed) //Check if execution is already beeing executed
         {
             for (CDBMessage& b : cdb)
             {
@@ -219,18 +222,24 @@ void execute() {
                     rs.Val1 = (b.producer == rs.Rs1 && rs.Rs1.first != -1) ? b.value : rs.Val1; //Check if Value is in cdb
                     rs.Val2 = (b.producer == rs.Rs2 && rs.Rs2.first != -1) ? b.value : rs.Val2;
                     ls(rs, { rsIndex, rs.rsType });
+                    rs.executed = true;
+                    done = true;
                     break;
                 }
             }
         }
         rsIndex++;
-        break;
+        if (done)
+        {
+            break;   
+        }
     }
 
     rsIndex = 0;
+    done = false;
     for (ReservationStation& r : alu_rs)
     {
-        if (r.busy)
+        if (r.busy && !r.executed) //Check if execution is already beeing executed
         {
             for (CDBMessage& b : cdb)
             {
@@ -239,12 +248,25 @@ void execute() {
                     r.Val1 = (b.producer == r.Rs1 && r.Rs1.first != -1) ? b.value : r.Val1; //Check if Value is in cdb
                     r.Val2 = (b.producer == r.Rs2 && r.Rs2.first != -1) ? b.value : r.Val2;
                     alu(r, { rsIndex, r.rsType });
+                    r.executed = true;
+                    done = true;
                     break;
                 }
             }
         }
         rsIndex++;
-        break;
+        if (done)
+        {
+            break;
+        }
+    }
+    if (rsIndex == 32)
+    {
+        ReservationStation r;
+        r.busy = true;
+        r.executed = false;
+        r.op = NOP;
+        alu(r, { -1, aluType });
     }
 }
 
@@ -257,15 +279,15 @@ void writeBack() {
     {
         if (cdb[i].valid)
         {
-            for (size_t j = 0; j < 32; j++)
+            ReservationStation* rs = cdb[i].producer.second == lsType ? ls_rs : alu_rs;
+            if (reg[rs[cdb[i].producer.first].dst].producerRS == cdb[i].producer)
             {
-                if (reg[j].producerRS == cdb[i].producer)
-                {
-                    reg[j].value = cdb[i].value;
-                    reg[j].busy = true;
-                    reg[j].producerRS.first = -1;
-                    cdb[i].valid = false;
-                }
+                reg[rs[cdb[i].producer.first].dst].value = cdb[i].value;
+                reg[rs[cdb[i].producer.first].dst].busy = true;
+                reg[rs[cdb[i].producer.first].dst].producerRS.first = -1;
+                cdb[i].valid = false;
+                rs[cdb[i].producer.first].busy = false;
+                rs[cdb[i].producer.first].executed = false;
             }
         }
     }
@@ -278,15 +300,17 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
     int cycles{ 0 };
     Instruction ins1(LOAD, 5, 1, 2); //funzt
     Instruction ins2(ADD, 4, 5, 2); //funzt
-    Instruction ins3(SUB, 6, 7, 8); //Läd erst das Ergebnis des vorherigen Befehls, bevor es das korrekte läd
+    Instruction ins3(SUB, 6, 7, 8); //funzt
+    Instruction ins4(MUL, 1, 2, 3); //funzt nicht, gehört aber so?
 
     initStorage(reg);
 
     instructionQueue[0] = ins1;
     instructionQueue[1] = ins2;
-    for (size_t i = 2; i <= 31; i++)
+    instructionQueue[2] = ins3;
+    for (size_t i = 3; i <= 31; i++)
     {
-        instructionQueue[i] = ins3;
+        instructionQueue[i] = ins4;
     }
 
     while (true)
