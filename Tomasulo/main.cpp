@@ -1,5 +1,7 @@
 #include<iostream>
 #include<random>
+#include<string>
+#include<fstream>
 
 enum OpCode {
     ADD, SUB, MUL,
@@ -81,6 +83,12 @@ int alubuffer{ -1 };
 std::pair<int, RsType> oldAluProducerRs;
 int aluDelay{ 0 };
 int lsDelay{ 0 };
+//Outputinformation:
+int aluInstructions{ 0 };
+int lsInstructions{ 0 };
+int stallCycles{ 0 };
+int rawPrevented{ 0 };
+
 
 
 void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
@@ -171,6 +179,7 @@ bool instructionFetchDecode() {
                 j++;
             }
             else {
+                stallCycles++;
                 return false;
             }
         }
@@ -219,11 +228,20 @@ void execute() {
             {
                 if ((rs.Rs1.first == -1 || b.producer == rs.Rs1) && (rs.Rs2.first == -1 || b.producer == rs.Rs2))
                 {
-                    rs.Val1 = (b.producer == rs.Rs1 && rs.Rs1.first != -1) ? b.value : rs.Val1; //Check if Value is in cdb
-                    rs.Val2 = (b.producer == rs.Rs2 && rs.Rs2.first != -1) ? b.value : rs.Val2;
+                    if (b.producer == rs.Rs1 && rs.Rs1.first != -1) //Check if Value is in cdb
+                    {
+                        rs.Val1 = b.value;
+                        rawPrevented++;
+                    }
+                    if (b.producer == rs.Rs2 && rs.Rs2.first != -1)
+                    {
+                        rs.Val2 = b.value;
+                        rawPrevented++;
+                    }
                     ls(rs, { rsIndex, rs.rsType });
                     rs.executed = true;
                     done = true;
+                    lsInstructions++;
                     break;
                 }
             }
@@ -250,6 +268,7 @@ void execute() {
                     alu(r, { rsIndex, r.rsType });
                     r.executed = true;
                     done = true;
+                    aluInstructions++;
                     break;
                 }
             }
@@ -293,25 +312,106 @@ void writeBack() {
     }
     cdbIndex = 0;
 }
+/// <summary>
+/// Decodes the Inputprogramm which is a string to an correct inputformat.
+/// Sorry for the following very ugly code D:
+/// </summary>
+void decodeProgramm() {
+    std::string prgm;
+    std::string line;
+    std::cout << "Enter the name of the file which contains the programm: ";
+    std::cin >> prgm;
+    std::ifstream file(prgm);
+    int lineIt{ 0 };
+    int spaceCount{ 0 };
+    if (!file)
+    {
+        std::cerr << "\nCould not open file" << std::endl;
+        decodeProgramm();
+        return;
+    }
+    while (std::getline(file, line))
+    {
+        int l{ 0 };
+        int j{ 0 };
+        line.append(" "); //So that the last Register is not beeing ignored
+        for (char i : line)
+        {
+            if (i == ' ')
+            {
+                prgm = "";
+                for (size_t n = j; n < l; n++)
+                {
+                    prgm.append(std::string(1, line[n]));
+                }
+
+                std::cout << "prgm: " << prgm;
+                if (prgm == "ADD")
+                {
+                    instructionQueue[lineIt].op = ADD;
+                }
+                else if (prgm == "SUB")
+                {
+                    instructionQueue[lineIt].op = SUB;
+                }
+                else if (prgm == "MUL")
+                {
+                    instructionQueue[lineIt].op = MUL;
+                }
+                else if (prgm == "DIV")
+                {
+                    instructionQueue[lineIt].op = DIV;
+                }
+                else if (prgm == "LOAD")
+                {
+                    instructionQueue[lineIt].op = LOAD;
+                }
+                else if (prgm == "STORE")
+                {
+                    instructionQueue[lineIt].op = STORE;
+                }
+                else if (spaceCount == 0)
+                {
+                    std::cout << "\nAn ERROR occured while reading programm";
+                }
+
+                if (spaceCount == 1)
+                {
+                    instructionQueue[lineIt].dst = prgm[1] - '0'; //-'0' for convertion to int
+                }
+                else if(spaceCount == 2 && l - j == 3)//Checking if src1 is offset or register
+                {
+                    instructionQueue[lineIt].src1 = prgm[1] - '0'; // No offset
+                }
+                else if (spaceCount == 2) //For the case that src1 is offset
+                {
+                    instructionQueue[lineIt].src1 = prgm[0] - '0';
+                    instructionQueue[lineIt].src2 = prgm[3] - '0';
+                }
+                else if (spaceCount == 3)
+                {
+                    instructionQueue[lineIt].src2 = prgm[1] - '0';
+                }
+
+                spaceCount++;
+                j = l + 1;
+            }
+            l++;
+        }
+        lineIt++;
+        spaceCount = 0;
+    }
+    file.close();
+}
 
 
 int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtsschritte zu machen
     int inputCycles{ 0 };
     int cycles{ 0 };
-    Instruction ins1(LOAD, 5, 1, 2); //funzt
-    Instruction ins2(ADD, 4, 5, 2); //funzt
-    Instruction ins3(SUB, 6, 7, 8); //funzt
-    Instruction ins4(MUL, 1, 2, 3); //funzt nicht, gehört aber so?
 
     initStorage(reg);
-
-    instructionQueue[0] = ins1;
-    instructionQueue[1] = ins2;
-    instructionQueue[2] = ins3;
-    for (size_t i = 3; i <= 31; i++)
-    {
-        instructionQueue[i] = ins4;
-    }
+    decodeProgramm();
+    //std::cout << "\nTestcode: " << instructionQueue[1].dst << " " << instructionQueue[1].src1 << " " << instructionQueue[1].src2;
 
     while (true)
     {
@@ -331,19 +431,23 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
         {
             switch (cycles)
             {
-            case 0: instructionFetchDecode(); std::cout << "\nFetch\n"; break; // split it
-            case 1: instructionFetchDecode(); std::cout << "\nFetch2\n"; break;
-            case 2: instructionFetchDecode(); execute(); std::cout << "\nex\n"; break;
-            case 3: instructionFetchDecode(); execute(); mem(); std::cout << "\nmem\n"; break;
+            case 0: instructionFetchDecode(); std::cout << "\nFetch" << std::endl; break; // split it
+            case 1: instructionFetchDecode(); std::cout << "\nFetch2" << std::endl; break;
+            case 2: instructionFetchDecode(); execute(); std::cout << "\nex" << std::endl; break;
+            case 3: instructionFetchDecode(); execute(); mem(); std::cout << "\nmem" << std::endl; break;
             default:
                 instructionFetchDecode();
                 execute();
                 mem();
                 writeBack();
-                std::cout << "\nAll\n";
+                std::cout << "\nAll\n" << std::endl;
                 break;
             }
             cycles++;
+            std::cout << "\nCycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
+                << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
+                << 100 * (aluInstructions / double(lsInstructions + aluInstructions)) << "% Auslastung L/S: "
+                << 100 * (lsInstructions / double(lsInstructions + aluInstructions)) << "%" << std::endl;
         }
     }
 }
