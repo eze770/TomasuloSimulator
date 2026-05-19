@@ -35,8 +35,8 @@ struct Register {
 
 struct ReservationStation {
     RsType rsType;
-    bool busy;
-    bool executed;
+    bool busy; //something is in the rs (false after writeback)
+    bool executed; //op in rs got executed (can still be busy) (true after execution)
 
     OpCode op;
 
@@ -94,7 +94,7 @@ int rawPrevented{ 0 };
 void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
     if (aluDelay == 0)
     {
-        if (alubuffer != -1 && oldAluProducerRs.first > -1)
+        if (alubuffer != -1)
         {
             cdb[cdbIndex].value = alubuffer;
             cdb[cdbIndex].valid = true;
@@ -112,6 +112,11 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
         default: break;
         }
         oldAluProducerRs = prodRs; //Remember it to write on it after the delay
+        rs.executed = true;
+        if (rs.op != NOP)
+        {
+            aluInstructions++;
+        }
     }
     else
     {
@@ -120,16 +125,20 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
 }
 
 void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase included
-    if (lsDelay == 0)
-    {
+    if (lsDelay == 0){
         switch (rs.op)
         {
         case LOAD: { cdb[cdbIndex].value = ram[rs.Val1 + rs.Val2]; cdb[cdbIndex].valid = true; cdb[cdbIndex].producer = prodRs; cdbIndex++; break; } //Takt//Takt
-        case STORE: { ram[rs.Val1 + rs.Val2] = reg[rs.dst].value; reg[rs.dst].busy = false; break; } //Takt//Takt
+        case STORE: { ram[rs.Val1 + reg[rs.Val2].value] = reg[rs.dst].value; reg[rs.dst].busy = false; break; } //Takt//Takt
         case NOP: { break; }
         default: break;
         }
         lsDelay = 1;
+        rs.executed = true;
+        if (rs.op != NOP)
+        {
+            lsInstructions++;
+        }
     }
     else
     {
@@ -151,6 +160,8 @@ void initStorage(Register* reg) {
 
         ls_rs[i].rsType = lsType;
         alu_rs[i].rsType = aluType;
+
+        instructionQueue[i].op == NOP;
     }
 }
 
@@ -160,6 +171,11 @@ bool instructionFetchDecode() {
     int l = 0;
     int j{ 0 };
     RsType rsType;
+    if (i.op == NOP)
+    {
+        stallCycles++;
+        return false;
+    }
     if (i.op == STORE || i.op == LOAD) //RS auswählen //Takt
     {
         rs = ls_rs;
@@ -187,6 +203,7 @@ bool instructionFetchDecode() {
         {
             reg[i.dst].producerRS = { j, rsType };
             rs[j].busy = true;
+            rs[j].executed = false;
             rs[j].op = i.op;
             rs[j].dst = i.dst;
             if (rs->rsType == lsType) //Check if val1 needs to be offset or registervalue
@@ -239,9 +256,7 @@ void execute() {
                         rawPrevented++;
                     }
                     ls(rs, { rsIndex, rs.rsType });
-                    rs.executed = true;
                     done = true;
-                    lsInstructions++;
                     break;
                 }
             }
@@ -263,12 +278,18 @@ void execute() {
             {
                 if ((r.Rs1.first == -1 || b.producer == r.Rs1) && (r.Rs2.first == -1 || b.producer == r.Rs2))
                 {
-                    r.Val1 = (b.producer == r.Rs1 && r.Rs1.first != -1) ? b.value : r.Val1; //Check if Value is in cdb
-                    r.Val2 = (b.producer == r.Rs2 && r.Rs2.first != -1) ? b.value : r.Val2;
+                    if (b.producer == r.Rs1 && r.Rs1.first != -1) //Check if Value is in cdb
+                    {
+                        r.Val1 = b.value;
+                        rawPrevented++;
+                    }
+                    if (b.producer == r.Rs2 && r.Rs2.first != -1)
+                    {
+                        r.Val2 = b.value;
+                        rawPrevented++;
+                    }
                     alu(r, { rsIndex, r.rsType });
-                    r.executed = true;
                     done = true;
-                    aluInstructions++;
                     break;
                 }
             }
@@ -279,7 +300,7 @@ void execute() {
             break;
         }
     }
-    if (rsIndex == 32)
+    if (rsIndex == 32) //So that alu stallcycles decrease and last result is beeing stored
     {
         ReservationStation r;
         r.busy = true;
@@ -294,7 +315,7 @@ bool mem() { //Currently implemented in ls(), dont know if its necessary
 }
 
 void writeBack() {
-    for (int i = cdbIndex - 1; i >= 0 ; i--)
+    for (int i = 0; i < 32 ; i++)
     {
         if (cdb[i].valid)
         {
