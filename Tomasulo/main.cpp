@@ -6,7 +6,7 @@
 enum OpCode {
     ADD, SUB, MUL,
     DIV, LOAD, STORE,
-    NOP
+    NOP, S, V, H, I
 };
 
 enum RsType {
@@ -20,7 +20,7 @@ struct Instruction {
     int src1; //Bei LOAD/STORE: src1 = Immediate
     int src2;
 
-    Instruction() : op(NOP), dst(0), src1(0), src2(0){}
+    Instruction() : op(NOP), dst(-1), src1(0), src2(0){}
     Instruction(OpCode op, int dst, int src1, int src2)
         : op(op), dst(dst), src1(src1), src2(src2){ }
 };
@@ -88,6 +88,7 @@ int aluInstructions{ 0 };
 int lsInstructions{ 0 };
 int stallCycles{ 0 };
 int rawPrevented{ 0 };
+bool autoOutput{ false };
 
 
 
@@ -129,7 +130,7 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase inc
         switch (rs.op)
         {
         case LOAD: { cdb[cdbIndex].value = ram[rs.Val1 + rs.Val2]; cdb[cdbIndex].valid = true; cdb[cdbIndex].producer = prodRs; cdbIndex++; break; } //Takt//Takt
-        case STORE: { ram[rs.Val1 + reg[rs.Val2].value] = reg[rs.dst].value; reg[rs.dst].busy = false; break; } //Takt//Takt
+        case STORE: { ram[rs.Val1 + reg[rs.Val2].value] = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; break; } //Takt//Takt
         case NOP: { break; }
         default: break;
         }
@@ -146,6 +147,19 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase inc
     }
 } 
 
+void showRegs() {
+    std::cout << "\nREG: ";
+    for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
+    {
+        std::cout << reg[i].value << " ";
+    }
+    std::cout << "\nRAM: ";
+    for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
+    {
+        std::cout << ram[i] << " ";
+    }
+}
+
 void initStorage(Register* reg) {
     for (size_t i = 0; i <= 31; i++)
     {
@@ -153,15 +167,13 @@ void initStorage(Register* reg) {
         std::mt19937 gen(rd());
         std::uniform_int_distribution<> distrib(0, 15);
         reg[i].value = distrib(gen);
-        reg[i].busy = false;
-        reg[i].producerRS = {-1, lsType};
 
         ram[i] = distrib(gen);
 
         ls_rs[i].rsType = lsType;
         alu_rs[i].rsType = aluType;
 
-        instructionQueue[i].op == NOP;
+        instructionQueue[i].op = NOP;
     }
 }
 
@@ -201,7 +213,7 @@ bool instructionFetchDecode() {
         }
         else
         {
-            reg[i.dst].producerRS = { j, rsType };
+            if (i.dst != -1) { reg[i.dst].producerRS = { j, rsType }; }
             rs[j].busy = true;
             rs[j].executed = false;
             rs[j].op = i.op;
@@ -234,7 +246,7 @@ bool instructionFetchDecode() {
     return true;
 }
 
-void execute() {
+void execute(int cycles) {
     int rsIndex{ 0 };
     bool done{ false };
     for (ReservationStation& rs : ls_rs)
@@ -255,10 +267,10 @@ void execute() {
                         rs.Val2 = b.value;
                         rawPrevented++;
                     }
-                    ls(rs, { rsIndex, rs.rsType });
-                    done = true;
                     break;
                 }
+                ls(rs, { rsIndex, rs.rsType });
+                done = true;
             }
         }
         rsIndex++;
@@ -288,8 +300,17 @@ void execute() {
                         r.Val2 = b.value;
                         rawPrevented++;
                     }
-                    alu(r, { rsIndex, r.rsType });
-                    done = true;
+                    switch (r.op)
+                    {
+                    case S: if (!autoOutput) { showRegs(); }; r.busy = false; break;
+                    case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles; }; r.busy = false; break;
+                    case V: autoOutput = true; r.busy = false; break;
+                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented; }; r.busy = false; break;
+                    default:
+                        alu(r, { rsIndex, r.rsType });
+                        done = true;
+                        break;
+                    }
                     break;
                 }
             }
@@ -367,7 +388,23 @@ void decodeProgramm() {
                 }
 
                 std::cout << "prgm: " << prgm;
-                if (prgm == "ADD")
+                if (prgm == "S" || prgm == "s")
+                {
+                    instructionQueue[lineIt].op = S;
+                }
+                else if (prgm == "V" || prgm == "v")
+                {
+                    instructionQueue[lineIt].op = V;
+                }
+                else if (prgm == "I" || prgm == "i")
+                {
+                    instructionQueue[lineIt].op = I;
+                }
+                else if (prgm == "H" || prgm == "h")
+                {
+                    instructionQueue[lineIt].op = H;
+                }
+                else if (prgm == "ADD")
                 {
                     instructionQueue[lineIt].op = ADD;
                 }
@@ -409,13 +446,14 @@ void decodeProgramm() {
                     instructionQueue[lineIt].src1 = prgm[0] - '0';
                     instructionQueue[lineIt].src2 = prgm[3] - '0';
                 }
-                else if (spaceCount == 3)
+                else if (spaceCount == 3 && prgm[0] != '(')
                 {
                     instructionQueue[lineIt].src2 = prgm[1] - '0';
                 }
 
                 spaceCount++;
                 j = l + 1;
+                std::cout << instructionQueue[lineIt].op;
             }
             l++;
         }
@@ -432,20 +470,9 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
 
     initStorage(reg);
     decodeProgramm();
-    //std::cout << "\nTestcode: " << instructionQueue[1].dst << " " << instructionQueue[1].src1 << " " << instructionQueue[1].src2;
 
     while (true)
     {
-        std::cout << "\nREG: ";
-        for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
-        {
-            std::cout << reg[i].value << " ";
-        }
-        std::cout << "\nRAM: ";
-        for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
-        {
-            std::cout << ram[i] << " ";
-        }
         std::cout << "\n+1 or +5 cycles? ";
         std::cin >> inputCycles;
         for (size_t i = 0; i < inputCycles; i++)
@@ -454,21 +481,25 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
             {
             case 0: instructionFetchDecode(); std::cout << "\nFetch" << std::endl; break; // split it
             case 1: instructionFetchDecode(); std::cout << "\nFetch2" << std::endl; break;
-            case 2: instructionFetchDecode(); execute(); std::cout << "\nex" << std::endl; break;
-            case 3: instructionFetchDecode(); execute(); mem(); std::cout << "\nmem" << std::endl; break;
+            case 2: instructionFetchDecode(); execute(cycles); std::cout << "\nex" << std::endl; break;
+            case 3: instructionFetchDecode(); execute(cycles); mem(); std::cout << "\nmem" << std::endl; break;
             default:
                 instructionFetchDecode();
-                execute();
+                execute(cycles);
                 mem();
                 writeBack();
                 std::cout << "\nAll\n" << std::endl;
                 break;
             }
             cycles++;
-            std::cout << "\nCycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
-                << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
-                << 100 * (aluInstructions / double(lsInstructions + aluInstructions)) << "% Auslastung L/S: "
-                << 100 * (lsInstructions / double(lsInstructions + aluInstructions)) << "%" << std::endl;
+            if (autoOutput)
+            {
+                showRegs();
+                std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
+                    << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
+                    << 100 * (aluInstructions / double(lsInstructions + aluInstructions)) << "% Auslastung L/S: "
+                    << 100 * (lsInstructions / double(lsInstructions + aluInstructions)) << "%" << std::endl;
+            }           
         }
     }
 }
