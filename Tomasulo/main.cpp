@@ -2,6 +2,16 @@
 #include<random>
 #include<string>
 #include<fstream>
+#include <unordered_map>
+
+#define Num_Rs_Alu 4
+#define Num_Rs_Ls 3
+#define Latency_AddSub 1
+#define Latency_Mul 3
+#define Latency_Div 5
+#define Latency_LS 2
+#define Num_Regs 8
+#define Num_Ram 1024
 
 enum OpCode {
     ADD, SUB, MUL,
@@ -71,12 +81,12 @@ struct CDBMessage {
 };
 
 
-int ram[32];
-Instruction instructionQueue[32];
-Register reg[32];
-ReservationStation ls_rs[32];
-ReservationStation alu_rs[32];
-CDBMessage cdb[32];
+int ram[Num_Ram];
+Instruction instructionQueue[64];
+Register reg[Num_Regs];
+ReservationStation ls_rs[Num_Rs_Ls];
+ReservationStation alu_rs[Num_Rs_Alu];
+CDBMessage cdb[64];
 int ic = 0;
 int cdbIndex{ 0 };
 int alubuffer{ -1 };
@@ -105,10 +115,10 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
 
         switch (rs.op)
         {
-        case ADD: { alubuffer = rs.Val1 + rs.Val2; aluDelay = 0; break; } //Takt
-        case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = 0; break; } //Takt
-        case MUL: { alubuffer = rs.Val1 * rs.Val2; aluDelay = 2; break; } //Takt//Takt//Takt
-        case DIV: { alubuffer = rs.Val1 / rs.Val2; aluDelay = 4; break; } //Takt//Takt//Takt//Takt//Takt
+        case ADD: { alubuffer = rs.Val1 + rs.Val2; aluDelay = Latency_AddSub - 1; break; } //Takt
+        case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = Latency_AddSub - 1; break; } //Takt
+        case MUL: { alubuffer = rs.Val1 * rs.Val2; aluDelay = Latency_Mul - 1; break; } //Takt//Takt//Takt
+        case DIV: { alubuffer = rs.Val1 / rs.Val2; aluDelay = Latency_Div - 1; break; } //Takt//Takt//Takt//Takt//Takt
         case NOP: { break; } //So that we can save the last value
         default: break;
         }
@@ -134,7 +144,7 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase inc
         case NOP: { break; }
         default: break;
         }
-        lsDelay = 1;
+        lsDelay = Latency_LS - 1;
         rs.executed = true;
         if (rs.op != NOP)
         {
@@ -161,19 +171,28 @@ void showRegs() {
 }
 
 void initStorage(Register* reg) {
-    for (size_t i = 0; i <= 31; i++)
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> distrib(0, 255);
+    for (size_t i = 0; i < Num_Regs; i++)
     {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> distrib(0, 15);
         reg[i].value = distrib(gen);
-
+    }
+    for (size_t i = 0; i < Num_Ram; i++)
+    {
         ram[i] = distrib(gen);
-
-        ls_rs[i].rsType = lsType;
-        alu_rs[i].rsType = aluType;
-
+    }
+    for (size_t i = 0; i < 63; i++)
+    {
         instructionQueue[i].op = NOP;
+    }
+    for (size_t i = 0; i < Num_Rs_Alu; i++)
+    {
+        alu_rs[i].rsType = aluType;
+    }
+    for (size_t i = 0; i < Num_Rs_Ls; i++)
+    {
+        ls_rs[i].rsType = lsType;
     }
 }
 
@@ -182,6 +201,7 @@ bool instructionFetchDecode() {
     Instruction i = instructionQueue[ic];
     int l = 0;
     int j{ 0 };
+    int it{ 0 };
     RsType rsType;
     if (i.op == NOP)
     {
@@ -192,17 +212,19 @@ bool instructionFetchDecode() {
     {
         rs = ls_rs;
         rsType = lsType;
+        it = Num_Rs_Ls;
     }
     else
     {
         rs = alu_rs;
         rsType = aluType;
+        it = Num_Rs_Alu;
     }
     while (true)
     {
         if (rs[j].busy) //Freie RS finden //Takt
         {
-            if (j < 31)
+            if (j < it)
             {
                 j++;
             }
@@ -321,7 +343,7 @@ void execute(int cycles) {
             break;
         }
     }
-    if (rsIndex == 32) //So that alu stallcycles decrease and last result is beeing stored
+    if (rsIndex == Num_Rs_Alu) //So that alu stallcycles decrease and last result is beeing stored
     {
         ReservationStation r;
         r.busy = true;
@@ -336,7 +358,7 @@ bool mem() { //Currently implemented in ls(), dont know if its necessary
 }
 
 void writeBack() {
-    for (int i = 0; i < 32 ; i++)
+    for (int i = 0; i < 64 ; i++)
     {
         if (cdb[i].valid)
         {
@@ -437,7 +459,7 @@ void decodeProgramm() {
                 {
                     instructionQueue[lineIt].dst = prgm[1] - '0'; //-'0' for convertion to int
                 }
-                else if(spaceCount == 2 && l - j == 3)//Checking if src1 is offset or register
+                else if (spaceCount == 2 && l - j == 3)//Checking if src1 is offset or register
                 {
                     instructionQueue[lineIt].src1 = prgm[1] - '0'; // No offset
                 }
