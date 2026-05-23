@@ -2,21 +2,44 @@
 #include<random>
 #include<string>
 #include<fstream>
-#include <unordered_map>
+#include <map>
 
+#ifndef Num_Rs_Alu
 #define Num_Rs_Alu 4
+#endif
+
+#ifndef Num_Rs_Ls
 #define Num_Rs_Ls 3
+#endif
+
+#ifndef Latency_AddSub
 #define Latency_AddSub 1
+#endif
+
+#ifndef Latency_Mul
 #define Latency_Mul 3
+#endif
+
+#ifndef Latency_Div
 #define Latency_Div 5
+#endif
+
+#ifndef Latency_LS
 #define Latency_LS 2
+#endif
+
+#ifndef Num_Regs
 #define Num_Regs 8
+#endif
+
+#ifndef Num_Ram
 #define Num_Ram 1024
+#endif
 
 enum OpCode {
     ADD, SUB, MUL,
     DIV, LOAD, STORE,
-    NOP, S, V, H, I
+    NOP, END, S, V, H, I
 };
 
 enum RsType {
@@ -30,7 +53,7 @@ struct Instruction {
     int src1; //Bei LOAD/STORE: src1 = Immediate
     int src2;
 
-    Instruction() : op(NOP), dst(-1), src1(0), src2(0){}
+    Instruction() : op(NOP), dst(-1), src1(-1), src2(-1){}
     Instruction(OpCode op, int dst, int src1, int src2)
         : op(op), dst(dst), src1(src1), src2(src2){ }
 };
@@ -46,7 +69,7 @@ struct Register {
 struct ReservationStation {
     RsType rsType;
     bool busy; //something is in the rs (false after writeback)
-    bool executed; //op in rs got executed (can still be busy) (true after execution)
+    bool executing; //op in rs is executing (can still be busy) (true after execution)
 
     OpCode op;
 
@@ -60,7 +83,7 @@ struct ReservationStation {
     //int instructionId;
 
     ReservationStation()
-        : rsType(lsType), busy(false), executed(false), op(NOP), Val1(0), Val2(0), Rs1({-1, lsType}), Rs2({-1, lsType}), dst(0) { }
+        : rsType(lsType), busy(false), executing(false), op(NOP), Val1(0), Val2(0), Rs1({-1, lsType}), Rs2({-1, lsType}), dst(0) { }
 };
 
 struct FunctionalUnit {
@@ -93,6 +116,11 @@ int alubuffer{ -1 };
 std::pair<int, RsType> oldAluProducerRs;
 int aluDelay{ 0 };
 int lsDelay{ 0 };
+int lastAluStore{ 0 };
+int lastLsStore{ 0 };
+bool finished{ false };
+bool AluRsCircled{ false };
+bool LsRsCircled{ false };
 //Outputinformation:
 int aluInstructions{ 0 };
 int lsInstructions{ 0 };
@@ -120,10 +148,11 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
         case MUL: { alubuffer = rs.Val1 * rs.Val2; aluDelay = Latency_Mul - 1; break; } //Takt//Takt//Takt
         case DIV: { alubuffer = rs.Val1 / rs.Val2; aluDelay = Latency_Div - 1; break; } //Takt//Takt//Takt//Takt//Takt
         case NOP: { break; } //So that we can save the last value
+        case END: { finished = true; break; }
         default: break;
         }
         oldAluProducerRs = prodRs; //Remember it to write on it after the delay
-        rs.executed = true;
+        rs.executing = true;
         if (rs.op != NOP)
         {
             aluInstructions++;
@@ -145,7 +174,7 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase inc
         default: break;
         }
         lsDelay = Latency_LS - 1;
-        rs.executed = true;
+        rs.executing = true;
         if (rs.op != NOP)
         {
             lsInstructions++;
@@ -158,13 +187,13 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase inc
 } 
 
 void showRegs() {
-    std::cout << "\nREG: ";
+    std::cout << "\n\nREG: ";
     for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
     {
         std::cout << reg[i].value << " ";
     }
     std::cout << "\nRAM: ";
-    for (size_t i = 0; i <= sizeof(reg) / sizeof(reg[0]) - 1; i++)
+    for (size_t i = 0; i <= sizeof(ram) / sizeof(ram[0]) - 1; i++)
     {
         std::cout << ram[i] << " ";
     }
@@ -212,13 +241,31 @@ bool instructionFetchDecode() {
     {
         rs = ls_rs;
         rsType = lsType;
-        it = Num_Rs_Ls;
+        it = Num_Rs_Ls - 1;
+        if (lastLsStore == it) //Remembers last RS Store so that instructions are in Order
+        {
+            j = 0;
+            LsRsCircled = true;
+        }
+        else
+        {
+            j = lastLsStore;
+        }
     }
     else
     {
         rs = alu_rs;
         rsType = aluType;
-        it = Num_Rs_Alu;
+        it = Num_Rs_Alu - 1;
+        if (lastAluStore == it) //Remembers last RS Store so that instructions are in Order
+        {
+            j = 0;
+            AluRsCircled = true;
+        }
+        else
+        {
+            j = lastAluStore;
+        }
     }
     while (true)
     {
@@ -237,29 +284,35 @@ bool instructionFetchDecode() {
         {
             if (i.dst != -1) { reg[i.dst].producerRS = { j, rsType }; }
             rs[j].busy = true;
-            rs[j].executed = false;
+            rs[j].executing = false;
             rs[j].op = i.op;
             rs[j].dst = i.dst;
-            if (rs->rsType == lsType) //Check if val1 needs to be offset or registervalue
+            if (i.src1 != -1 && i.src2 != -1) //Some special commands like END use -1 and dont need values
             {
-                rs[j].Val1 = i.src1;
-            }
-            else if (reg[i.src1].producerRS.first == -1) //Check if value is available
-            {
-                rs[j].Val1 = reg[i.src1].value;
-            }
-            else
-            {
-                rs[j].Rs1 = reg[i.src1].producerRS;
-            }
+                if (rs->rsType == lsType) //Check if val1 needs to be offset or registervalue
+                {
+                    rs[j].Val1 = i.src1;
+                    lastLsStore = j;
+                }
+                else if (reg[i.src1].producerRS.first == -1 || i.dst == i.src1) //Check if value is available (could also write and read from same reg)
+                {
+                    rs[j].Val1 = reg[i.src1].value;
+                    lastAluStore = j;
+                }
+                else
+                {
+                    rs[j].Rs1 = reg[i.src1].producerRS;
+                    lastAluStore = j;
+                }
 
-            if (reg[i.src2].producerRS.first == -1) //Check if value is available
-            {
-                rs[j].Val2 = reg[i.src2].value;
-            }
-            else
-            {
-                rs[j].Rs2 = reg[i.src2].producerRS;
+                if (reg[i.src2].producerRS.first == -1 || i.dst == i.src2) //Check if value is available (could also write and read from same reg)
+                {
+                    rs[j].Val2 = reg[i.src2].value;
+                }
+                else
+                {
+                    rs[j].Rs2 = reg[i.src2].producerRS;
+                }
             }
             break;
         }
@@ -271,9 +324,19 @@ bool instructionFetchDecode() {
 void execute(int cycles) {
     int rsIndex{ 0 };
     bool done{ false };
+    int start{ 0 };
     for (ReservationStation& rs : ls_rs)
     {
-        if (rs.busy && !rs.executed) //Check if execution is already beeing executed
+        if (LsRsCircled)
+        {
+            start = rsIndex <= lastLsStore ? 0 : Num_Rs_Ls;
+        }
+        else
+        {
+            start = Num_Rs_Ls;
+        }
+
+        if (rs.busy && !rs.executing && rsIndex < start) //Check if execution is already beeing executed
         {
             for (CDBMessage& b : cdb)
             {
@@ -298,15 +361,30 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
-            break;   
+            break;
+        }
+        if (LsRsCircled)
+        {
+            LsRsCircled = rsIndex == Num_Rs_Ls - 1 ? false : true;
         }
     }
 
     rsIndex = 0;
     done = false;
+    start = 0;
     for (ReservationStation& r : alu_rs)
     {
-        if (r.busy && !r.executed) //Check if execution is already beeing executed
+        if (AluRsCircled)
+        {
+            start = rsIndex <= lastAluStore ? 0 : Num_Rs_Alu;
+        }
+        else
+        {
+            start = Num_Rs_Alu;
+        }
+        std::cout << " " << r.op << r.busy << r.executing << start;
+
+        if (r.busy && !r.executing && rsIndex < start) //Check if execution is already beeing executed
         {
             for (CDBMessage& b : cdb)
             {
@@ -324,10 +402,37 @@ void execute(int cycles) {
                     }
                     switch (r.op)
                     {
-                    case S: if (!autoOutput) { showRegs(); }; r.busy = false; break;
-                    case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles; }; r.busy = false; break;
-                    case V: autoOutput = true; r.busy = false; break;
-                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented; }; r.busy = false; break;
+                    case S: if (!autoOutput) { showRegs(); }; r.busy = false; r.executing = false; break;
+                    case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles; }; r.busy = false; r.executing = false; break;
+                    case V: autoOutput = true; r.busy = false; r.executing = false; break;
+                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented; }; r.busy = false; r.executing = false; break;
+                    case END: {
+                        bool breaking{ false };
+                        for (size_t i = 0; i < Num_Rs_Ls; i++)
+                        {
+                            if (ls_rs[i].busy)
+                            {
+                                breaking = true;
+                            }
+                        }
+                        for (size_t i = 0; i < sizeof(cdb) / sizeof(cdb[0]) - 1; i++)
+                        {
+                            if (cdb[i].valid)
+                            {
+                                breaking = true;
+                            }
+                        }
+                        if (breaking)
+                        {
+                            break;
+                        }
+                        else
+                        {
+                            alu(r, { rsIndex, r.rsType });
+                            done = true;
+                            break;
+                        }
+                    }
                     default:
                         alu(r, { rsIndex, r.rsType });
                         done = true;
@@ -342,12 +447,17 @@ void execute(int cycles) {
         {
             break;
         }
+
+        if (AluRsCircled)
+        {
+            AluRsCircled = rsIndex == Num_Rs_Alu - 1 ? false : true;
+        }
     }
     if (rsIndex == Num_Rs_Alu) //So that alu stallcycles decrease and last result is beeing stored
     {
         ReservationStation r;
         r.busy = true;
-        r.executed = false;
+        r.executing = false;
         r.op = NOP;
         alu(r, { -1, aluType });
     }
@@ -370,7 +480,7 @@ void writeBack() {
                 reg[rs[cdb[i].producer.first].dst].producerRS.first = -1;
                 cdb[i].valid = false;
                 rs[cdb[i].producer.first].busy = false;
-                rs[cdb[i].producer.first].executed = false;
+                rs[cdb[i].producer.first].executing = false;
             }
         }
     }
@@ -475,7 +585,6 @@ void decodeProgramm() {
 
                 spaceCount++;
                 j = l + 1;
-                std::cout << instructionQueue[lineIt].op;
             }
             l++;
         }
@@ -483,6 +592,7 @@ void decodeProgramm() {
         spaceCount = 0;
     }
     file.close();
+    instructionQueue[lineIt].op = END;
 }
 
 
@@ -492,16 +602,21 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
 
     initStorage(reg);
     decodeProgramm();
+    showRegs();
 
-    while (true)
+    while (!finished)
     {
-        std::cout << "\n+1 or +5 cycles? ";
+        std::cout << "\n\n+1 or +5 cycles? ";
         std::cin >> inputCycles;
         for (size_t i = 0; i < inputCycles; i++)
         {
+            if (finished)
+            {
+                break;
+            }
             switch (cycles)
             {
-            case 0: instructionFetchDecode(); std::cout << "\nFetch" << std::endl; break; // split it
+            case 0: instructionFetchDecode(); std::cout << "\nFetch" << std::endl; break;
             case 1: instructionFetchDecode(); std::cout << "\nFetch2" << std::endl; break;
             case 2: instructionFetchDecode(); execute(cycles); std::cout << "\nex" << std::endl; break;
             case 3: instructionFetchDecode(); execute(cycles); mem(); std::cout << "\nmem" << std::endl; break;
@@ -517,11 +632,12 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
             if (autoOutput)
             {
                 showRegs();
-                std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
+                std::cout << "\n\nCycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
                     << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
                     << 100 * (aluInstructions / double(lsInstructions + aluInstructions)) << "% Auslastung L/S: "
                     << 100 * (lsInstructions / double(lsInstructions + aluInstructions)) << "%" << std::endl;
             }           
         }
     }
+    std::cout << "\n\n---------------------------------------------------------------------\nProgramm finished!\n---------------------------------------------------------------------";
 }
