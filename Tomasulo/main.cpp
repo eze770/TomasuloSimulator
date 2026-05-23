@@ -133,6 +133,8 @@ bool autoOutput{ false };
 void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
     if (aluDelay == 0)
     {
+        std::cout << "\nExecuting: " << rs.op;
+        rs.executing = true;
         if (alubuffer != -1)
         {
             cdb[cdbIndex].value = alubuffer;
@@ -147,12 +149,11 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
         case SUB: { alubuffer = rs.Val1 - rs.Val2; aluDelay = Latency_AddSub - 1; break; } //Takt
         case MUL: { alubuffer = rs.Val1 * rs.Val2; aluDelay = Latency_Mul - 1; break; } //Takt//Takt//Takt
         case DIV: { alubuffer = rs.Val1 / rs.Val2; aluDelay = Latency_Div - 1; break; } //Takt//Takt//Takt//Takt//Takt
-        case NOP: { break; } //So that we can save the last value
+        case NOP: { stallCycles++; rs.executing = true; rs.busy = false; break; } //So that we can save the last value
         case END: { finished = true; break; }
         default: break;
         }
         oldAluProducerRs = prodRs; //Remember it to write on it after the delay
-        rs.executing = true;
         if (rs.op != NOP)
         {
             aluInstructions++;
@@ -166,15 +167,15 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
 
 void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase included
     if (lsDelay == 0){
+        rs.executing = true;
         switch (rs.op)
         {
         case LOAD: { cdb[cdbIndex].value = ram[rs.Val1 + rs.Val2]; cdb[cdbIndex].valid = true; cdb[cdbIndex].producer = prodRs; cdbIndex++; break; } //Takt//Takt
-        case STORE: { ram[rs.Val1 + reg[rs.Val2].value] = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; break; } //Takt//Takt
-        case NOP: { break; }
+        case STORE: { ram[rs.Val1 + reg[rs.Val2].value] = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; rs.executing = false; break; } //Takt//Takt
+        case NOP: { stallCycles++; rs.executing = true, rs.busy = false; break; }
         default: break;
         }
         lsDelay = Latency_LS - 1;
-        rs.executing = true;
         if (rs.op != NOP)
         {
             lsInstructions++;
@@ -231,12 +232,13 @@ bool instructionFetchDecode() {
     int l = 0;
     int j{ 0 };
     int it{ 0 };
+    std::cout << "LAS: " << lastAluStore << " MAX: " << Num_Rs_Alu;
     RsType rsType;
-    if (i.op == NOP)
+    /*if (i.op == NOP)
     {
         stallCycles++;
         return false;
-    }
+    }*/
     if (i.op == STORE || i.op == LOAD) //RS auswählen //Takt
     {
         rs = ls_rs;
@@ -259,6 +261,7 @@ bool instructionFetchDecode() {
         it = Num_Rs_Alu - 1;
         if (lastAluStore == it) //Remembers last RS Store so that instructions are in Order
         {
+            std::cout << "\nTRUE";
             j = 0;
             AluRsCircled = true;
         }
@@ -314,6 +317,10 @@ bool instructionFetchDecode() {
                     rs[j].Rs2 = reg[i.src2].producerRS;
                 }
             }
+            else
+            {
+                lastAluStore = j;
+            }
             break;
         }
     }
@@ -361,11 +368,11 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
+            if (LsRsCircled)
+            {
+                LsRsCircled = rsIndex == Num_Rs_Ls - 1 ? false : true;
+            }
             break;
-        }
-        if (LsRsCircled)
-        {
-            LsRsCircled = rsIndex == Num_Rs_Ls - 1 ? false : true;
         }
     }
 
@@ -382,7 +389,7 @@ void execute(int cycles) {
         {
             start = Num_Rs_Alu;
         }
-        std::cout << " " << r.op << r.busy << r.executing << start;
+        std::cout << " " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluStore;
 
         if (r.busy && !r.executing && rsIndex < start) //Check if execution is already beeing executed
         {
@@ -441,25 +448,24 @@ void execute(int cycles) {
                     break;
                 }
             }
+            if (r.op != V && r.op != H && r.op != S && r.op != I && !done)
+            {
+                ReservationStation temp;
+                temp.op = NOP;
+                alu(temp, { -1, aluType }); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
+                done = true;
+            }
         }
         rsIndex++;
         if (done)
         {
+            std::cout << "SDFSDF" << AluRsCircled;
+            if (AluRsCircled && r.executing)
+            {
+                AluRsCircled = rsIndex == Num_Rs_Alu ? false : true;
+            }
             break;
         }
-
-        if (AluRsCircled)
-        {
-            AluRsCircled = rsIndex == Num_Rs_Alu - 1 ? false : true;
-        }
-    }
-    if (rsIndex == Num_Rs_Alu) //So that alu stallcycles decrease and last result is beeing stored
-    {
-        ReservationStation r;
-        r.busy = true;
-        r.executing = false;
-        r.op = NOP;
-        alu(r, { -1, aluType });
     }
 }
 
@@ -592,7 +598,8 @@ void decodeProgramm() {
         spaceCount = 0;
     }
     file.close();
-    instructionQueue[lineIt].op = END;
+    instructionQueue[lineIt].op = NOP;
+    instructionQueue[lineIt + 1].op = END;
 }
 
 
