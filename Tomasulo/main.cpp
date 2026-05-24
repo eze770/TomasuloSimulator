@@ -133,7 +133,7 @@ bool autoOutput{ false };
 void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
     if (aluDelay == 0)
     {
-        std::cout << "\nExecuting: " << rs.op;
+        //std::cout << "\nExecuting: " << rs.op;
         rs.executing = true;
         if (alubuffer != -1)
         {
@@ -167,6 +167,7 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs) {
 
 void ls(ReservationStation& rs, std::pair<int, RsType> prodRs) { //Mem phase included
     if (lsDelay == 0){
+        //std::cout << "\nExecuting: " << rs.op;
         rs.executing = true;
         switch (rs.op)
         {
@@ -232,7 +233,6 @@ bool instructionFetchDecode() {
     int l = 0;
     int j{ 0 };
     int it{ 0 };
-    std::cout << "LAS: " << lastAluStore << " MAX: " << Num_Rs_Alu;
     RsType rsType;
     /*if (i.op == NOP)
     {
@@ -247,7 +247,6 @@ bool instructionFetchDecode() {
         if (lastLsStore == it) //Remembers last RS Store so that instructions are in Order
         {
             j = 0;
-            LsRsCircled = true;
         }
         else
         {
@@ -261,9 +260,7 @@ bool instructionFetchDecode() {
         it = Num_Rs_Alu - 1;
         if (lastAluStore == it) //Remembers last RS Store so that instructions are in Order
         {
-            std::cout << "\nTRUE";
             j = 0;
-            AluRsCircled = true;
         }
         else
         {
@@ -285,6 +282,8 @@ bool instructionFetchDecode() {
         }
         else
         {
+            if (lastAluStore == it && rs->rsType == aluType && !rs[it].executing) AluRsCircled = true; //For the case that Rs is starting from the beginning again and execute needs to know where to continue
+            if (lastLsStore == it && rs->rsType == lsType) LsRsCircled = true;
             if (i.dst != -1) { reg[i.dst].producerRS = { j, rsType }; }
             rs[j].busy = true;
             rs[j].executing = false;
@@ -342,6 +341,7 @@ void execute(int cycles) {
         {
             start = Num_Rs_Ls;
         }
+        //std::cout << " " << rs.op << rs.busy << rs.executing << start << " LL " << LsRsCircled << " " << lastLsStore;
 
         if (rs.busy && !rs.executing && rsIndex < start) //Check if execution is already beeing executed
         {
@@ -359,16 +359,23 @@ void execute(int cycles) {
                         rs.Val2 = b.value;
                         rawPrevented++;
                     }
+                    ls(rs, { rsIndex, rs.rsType });
+                    done = true;
                     break;
                 }
-                ls(rs, { rsIndex, rs.rsType });
+            }
+            if (!done)
+            {
+                ReservationStation temp;
+                temp.op = NOP;
+                ls(temp, { -1, lsType }); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
                 done = true;
             }
         }
         rsIndex++;
         if (done)
         {
-            if (LsRsCircled)
+            if (LsRsCircled && rs.executing)
             {
                 LsRsCircled = rsIndex == Num_Rs_Ls - 1 ? false : true;
             }
@@ -389,7 +396,7 @@ void execute(int cycles) {
         {
             start = Num_Rs_Alu;
         }
-        std::cout << " " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluStore;
+        //std::cout << " " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluStore;
 
         if (r.busy && !r.executing && rsIndex < start) //Check if execution is already beeing executed
         {
@@ -417,8 +424,9 @@ void execute(int cycles) {
                         bool breaking{ false };
                         for (size_t i = 0; i < Num_Rs_Ls; i++)
                         {
-                            if (ls_rs[i].busy)
+                            if (ls_rs[i].busy && !ls_rs[i].executing && ls_rs[i].op != NOP)
                             {
+                                std::cout << "\n\nBREAK rs Busy: " << i;
                                 breaking = true;
                             }
                         }
@@ -426,6 +434,7 @@ void execute(int cycles) {
                         {
                             if (cdb[i].valid)
                             {
+                                std::cout << "\n\nBREAK cdb Busy: " << i;
                                 breaking = true;
                             }
                         }
@@ -459,7 +468,6 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
-            std::cout << "SDFSDF" << AluRsCircled;
             if (AluRsCircled && r.executing)
             {
                 AluRsCircled = rsIndex == Num_Rs_Alu ? false : true;
@@ -482,12 +490,12 @@ void writeBack() {
             if (reg[rs[cdb[i].producer.first].dst].producerRS == cdb[i].producer)
             {
                 reg[rs[cdb[i].producer.first].dst].value = cdb[i].value;
-                reg[rs[cdb[i].producer.first].dst].busy = true;
+                reg[rs[cdb[i].producer.first].dst].busy = true; //implemented it the wrong way (true means, the value is ready)
                 reg[rs[cdb[i].producer.first].dst].producerRS.first = -1;
-                cdb[i].valid = false;
-                rs[cdb[i].producer.first].busy = false;
-                rs[cdb[i].producer.first].executing = false;
             }
+            cdb[i].valid = false;
+            rs[cdb[i].producer.first].busy = false;
+            rs[cdb[i].producer.first].executing = false;
         }
     }
     cdbIndex = 0;

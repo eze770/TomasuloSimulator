@@ -1,0 +1,4 @@
+V
+LOAD R0, 0(R1)
+ADD R0, R1, R1 (WAW)
+SUB R1, R2, R2 (WAR)
