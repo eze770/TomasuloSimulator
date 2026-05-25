@@ -2,7 +2,8 @@
 #include<random>
 #include<string>
 #include<fstream>
-#include <map>
+#include<map>
+#include<limits>
 
 #ifndef Num_Rs_Alu
 #define Num_Rs_Alu 4
@@ -761,4 +762,7 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
         }
     }
     std::cout << "\n\n---------------------------------------------------------------------\nProgramm finished!\n---------------------------------------------------------------------";
+    std::cout << "\nZum Beenden Enter druecken...";
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    std::cin.get();
 }
