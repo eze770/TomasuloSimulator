@@ -165,7 +165,7 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) {
                 }
                 aluDelay = Latency_Div; break;
             } //Takt//Takt//Takt//Takt//Takt
-            case NOP: { stallCycles++; rs.executing = true; rs.busy = false; break; } //So that we can save the last value
+            case NOP: { rs.executing = true; rs.busy = false; break; } //So that we can save the last value
             case END: { finished = true; break; }
             default: break;
             }
@@ -207,7 +207,7 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) { /
             {
             case LOAD: { lsbuffer = ram[rs.Val1 + rs.Val2]; lastLsOp = LOAD; break; } //Takt//Takt
             case STORE: { lastRamDst = rs.Val1 + reg[rs.Val2].value; std::cout << "\ndst: " << lastRamDst; lsbuffer = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; rs.executing = true; lastLsOp = STORE; break; } //Takt//Takt
-            case NOP: { stallCycles++; rs.executing = true, rs.busy = false; lastLsOp = NOP; break; }
+            case NOP: { rs.executing = true, rs.busy = false; lastLsOp = NOP; break; }
             default: break;
             }
             oldLsProducerRs = prodRs;
@@ -393,6 +393,7 @@ bool instructionFetchDecode() {
 void execute(int cycles) {
     int rsIndex{ 0 };
     bool done{ false };
+    bool waitingForValue{ false };
     int start{ 0 };
     int cdbRead{ 0 };
     ReservationStation temp;
@@ -410,6 +411,7 @@ void execute(int cycles) {
 
         if (rs.busy && !rs.executing && rsIndex < start) //Check if execution is already beeing executed
         {
+            waitingForValue = true;
             for (CDBMessage& b : cdb)
             {
                 if (b.producer == rs.Rs1 && rs.Rs1.first != -1) //Check if Value is in cdb
@@ -455,10 +457,12 @@ void execute(int cycles) {
     {
         temp.op = NOP;
         ls(temp, { -1, lsType }, false); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
+        if(waitingForValue)stallCycles++;
     }
 
     rsIndex = 0;
     done = false;
+    waitingForValue = false;
     start = 0;
     cdbRead = 0;
     ReservationStation aluTemp;
@@ -476,6 +480,7 @@ void execute(int cycles) {
 
         if (r.busy && !r.executing && rsIndex < start) //Check if execution is already beeing executed
         {
+            waitingForValue = true;
             for (CDBMessage& b : cdb)
             {
                 if (b.producer == r.Rs1 && r.Rs1.first != -1) //Check if Value is in cdb
@@ -553,6 +558,7 @@ void execute(int cycles) {
     {
         aluTemp.op = NOP;
         alu(aluTemp, { -1, aluType }, false); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
+        if(waitingForValue)stallCycles++;
     }
 //It is important to decrease the delay AFTER both ls and alu execution
     aluDelay--;
