@@ -131,6 +131,7 @@ int lastLsExecuted{ 0 };
 OpCode lastLsOp{ STORE };
 bool newLsEx{ false };
 bool newAluEx{ false };
+int fetchBalance{ 0 };
 //Outputinformation:
 int aluInstructions{ 0 };
 int lsInstructions{ 0 };
@@ -147,7 +148,6 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) {
         {
             //std::cout << "\nExecuting: " << rs.op;
             rs.executing = true;
-            newAluEx = true;
 
             switch (rs.op)
             {
@@ -166,7 +166,7 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) {
                 }
                 aluDelay = Latency_Div; break;
             } //Takt//Takt//Takt//Takt//Takt
-            case NOP: { rs.executing = true; rs.busy = false; break; } //So that we can save the last value
+            case NOP: { rs.executing = true; rs.busy = false; newAluEx = false; break; } //So that we can save the last value
             case END: { finished = true; break; }
             default: break;
             }
@@ -174,6 +174,8 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) {
             if (rs.op != NOP && rs.op != END)
             {
                 aluInstructions++;
+
+                newAluEx = true;
             }
         }
         else
@@ -202,13 +204,12 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) { /
         if (lsDelay <= 0) {
             //std::cout << "\nExecuting: " << rs.op;
             rs.executing = true;
-            newLsEx = true;
 
             switch (rs.op)
             {
             case LOAD: { lsbuffer = ram[rs.Val1 + rs.Val2]; lastLsOp = LOAD; break; } //Takt//Takt
-            case STORE: { lastRamDst = rs.Val1 + reg[rs.Val2].value; std::cout << "\ndst: " << lastRamDst; lsbuffer = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; rs.executing = true; lastLsOp = STORE; break; } //Takt//Takt
-            case NOP: { rs.executing = true, rs.busy = false; lastLsOp = NOP; break; }
+            case STORE: { lastRamDst = rs.Val1 + reg[rs.Val2].value; lsbuffer = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; rs.executing = true; lastLsOp = STORE; break; } //Takt//Takt
+            case NOP: { rs.executing = true, rs.busy = false; lastLsOp = NOP; newLsEx = false; break; }
             default: break;
             }
             oldLsProducerRs = prodRs;
@@ -216,6 +217,7 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) { /
             {
                 lsInstructions++;
                 lsDelay = Latency_LS;
+                newLsEx = true;
             }
         }
         else
@@ -333,12 +335,16 @@ bool instructionFetchDecode() {
                 j++;
             }
             else {
-                stallCycles++;
+                if(i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP) stallCycles++;
                 return false;
             }
         }
         else
         {
+            if (i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP)
+            {
+                fetchBalance++;
+            }
             if (lastAluStore == it && rs->rsType == aluType && !rs[it].executing) AluRsCircled = true; //For the case that Rs is starting from the beginning again and execute needs to know where to continue
             if (lastLsStore == it && rs->rsType == lsType && !rs[it].executing) LsRsCircled = true;
             if (i.dst != -1 && i.op != STORE) { reg[i.dst].producerRS = { j, rsType }; }
@@ -388,6 +394,10 @@ bool instructionFetchDecode() {
         }
     }
     ic++;
+    if (i.op == V || i.op == H || i.op == I || i.op == S)
+    {
+        instructionFetchDecode();
+    }
     return true;
 }
 
@@ -447,6 +457,7 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
+            fetchBalance--;
             if (LsRsCircled && rs.executing)
             {
                 LsRsCircled = rsIndex == Num_Rs_Ls - 1 ? false : true;
@@ -458,7 +469,6 @@ void execute(int cycles) {
     {
         temp.op = NOP;
         ls(temp, { -1, lsType }, false); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
-        if(waitingForValue)stallCycles++;
     }
 
     rsIndex = 0;
@@ -548,6 +558,7 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
+            fetchBalance--;
             if (AluRsCircled && r.executing)
             {
                 AluRsCircled = rsIndex == Num_Rs_Alu ? false : true;
@@ -559,9 +570,35 @@ void execute(int cycles) {
     {
         aluTemp.op = NOP;
         alu(aluTemp, { -1, aluType }, false); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
-        if(waitingForValue)stallCycles++;
     }
-//It is important to decrease the delay AFTER both ls and alu execution
+
+    //Counting StallCycles
+    for (ReservationStation& rs : ls_rs)
+    {
+        if (rs.busy && !rs.executing && rs.op != H && rs.op != S && rs.op != V && rs.op != I && rs.op != END && rs.op != NOP)
+        {
+            stallCycles++;
+        }
+    }
+    for (ReservationStation& rs : alu_rs)
+    {
+        std::cout << rs.op;
+        if (rs.busy && !rs.executing && rs.op != H && rs.op != S && rs.op != V && rs.op != I && rs.op != END && rs.op != NOP)
+        {
+            std::cout << " " << rs.op;
+            stallCycles++;           
+        }
+    }
+
+
+    //I do this because my warmupphase makes its first execute in Cycle 3, which means that there could be 2 commands which are not executing. I dont want to count them as stalls
+    if (fetchBalance > 0)
+    {
+        stallCycles -= fetchBalance;
+    }
+    std::cout << "Fetchbalance: " << fetchBalance;
+
+    //It is important to decrease the delay AFTER both ls and alu execution
     aluDelay--;
     alu(aluTemp, { -1, aluType }, true); //To write to cdb at the exact right moment
 
