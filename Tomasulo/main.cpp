@@ -340,7 +340,6 @@ bool instructionFetchDecode() {
         }
         else
         {
-            std::cout << ic <<j;
             if (i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP)
             {
                 fetchBalance++;
@@ -502,7 +501,7 @@ void execute(int cycles) {
         {
             start = Num_Rs_Alu;
         }
-        std::cout << " ALU: " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluExecuted;
+        //std::cout << " ALU: " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluExecuted;
 
         if (r.busy && !r.executing && rsIndex < start) //Check if execution is already beeing executed
         {
@@ -803,7 +802,7 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
                 instructionFetchDecode();
                 execute(cycles);
                 mem();
-                std::cout << "\nAll\n" << std::endl;
+                std::cout << "\nFull pipeline-step" << std::endl;
                 break;
             }
             cycles++;
