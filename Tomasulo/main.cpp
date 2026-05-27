@@ -75,7 +75,7 @@ struct ReservationStation {
 
     OpCode op;
 
-    int Val1, Val2;          // Operationvalues, LOAD/STORE: Val1 = immediate, Val2 = address
+    int Val1, Val2, src1, src2;          // Operationvalues, LOAD/STORE: Val1 = immediate, Val2 = address
     std::pair<int, RsType> Rs1, Rs2, dstRs;  // waiting RS, dstRs is only used for STORE
     int dst;
 
@@ -85,7 +85,7 @@ struct ReservationStation {
     //int instructionId;
 
     ReservationStation()
-        : rsType(lsType), busy(false), executing(false), op(NOP), Val1(0), Val2(0), Rs1({ -1, lsType }), Rs2({ -1, lsType }), dstRs({-1, lsType}), dst(0) { }
+        : rsType(lsType), busy(false), executing(false), op(NOP), Val1(0), Val2(0), src1(-1), src2(-1), Rs1({ -1, lsType }), Rs2({ -1, lsType }), dstRs({-1, lsType}), dst(0) { }
 };
 
 struct FunctionalUnit {
@@ -166,17 +166,16 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) {
                 }
                 aluDelay = Latency_Div; break;
             } //Takt//Takt//Takt//Takt//Takt
-            case NOP: { rs.executing = true; rs.busy = false; newAluEx = false; break; } //So that we can save the last value
+            case NOP: { rs.busy = false; break; } //So that we can save the last value
             case END: { finished = true; break; }
             default: break;
             }
             oldAluProducerRs = prodRs; //Remember it to write on it after the delay
-            if (rs.op != NOP && rs.op != END)
+            if (rs.op != END && rs.op != NOP)
             {
                 aluInstructions++;
-
-                newAluEx = true;
             }
+            newAluEx = true;
         }
         else
         {
@@ -209,7 +208,7 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) { /
             {
             case LOAD: { lsbuffer = ram[rs.Val1 + rs.Val2]; lastLsOp = LOAD; break; } //Takt//Takt
             case STORE: { lastRamDst = rs.Val1 + reg[rs.Val2].value; lsbuffer = reg[rs.dst].value; reg[rs.dst].busy = false; rs.busy = false; rs.executing = true; lastLsOp = STORE; break; } //Takt//Takt
-            case NOP: { rs.executing = true, rs.busy = false; lastLsOp = NOP; newLsEx = false; break; }
+            case NOP: { rs.executing = true, rs.busy = false; lastLsOp = NOP; break; }
             default: break;
             }
             oldLsProducerRs = prodRs;
@@ -217,8 +216,8 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) { /
             {
                 lsInstructions++;
                 lsDelay = Latency_LS;
-                newLsEx = true;
             }
+            newLsEx = true;
         }
         else
         {
@@ -341,6 +340,7 @@ bool instructionFetchDecode() {
         }
         else
         {
+            std::cout << ic <<j;
             if (i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP)
             {
                 fetchBalance++;
@@ -374,6 +374,7 @@ bool instructionFetchDecode() {
                 else
                 {
                     rs[j].Rs1 = reg[i.src1].producerRS;
+                    rs[j].src1 = i.src1;
                     lastAluStore = j;
                 }
 
@@ -384,6 +385,7 @@ bool instructionFetchDecode() {
                 else
                 {
                     rs[j].Rs2 = reg[i.src2].producerRS;
+                    rs[j].src2 = i.src2;
                 }
             }
             else
@@ -404,14 +406,15 @@ bool instructionFetchDecode() {
 void execute(int cycles) {
     int rsIndex{ 0 };
     bool done{ false };
-    bool waitingForValue{ false };
     int start{ 0 };
     int cdbRead{ 0 };
+    bool waitingRs{ false };
     ReservationStation temp;
     for (ReservationStation& rs : ls_rs)
     {
         if (LsRsCircled)
         {
+            if (lastLsExecuted == Num_Rs_Ls - 1) lastLsExecuted = -1;
             start = rsIndex <= lastLsExecuted ? 0 : Num_Rs_Ls;
         }
         else
@@ -422,7 +425,7 @@ void execute(int cycles) {
 
         if (rs.busy && !rs.executing && rsIndex < start) //Check if execution is already beeing executed
         {
-            waitingForValue = true;
+            waitingRs = true;
             for (CDBMessage& b : cdb)
             {
                 if (b.producer == rs.Rs1 && rs.Rs1.first != -1) //Check if Value is in cdb
@@ -430,18 +433,29 @@ void execute(int cycles) {
                     rs.Val1 = b.value;
                     rs.Rs1.first = -1;
                     cdbRead++;
+                }else if (reg[rs.src1].producerRS.first == -1)
+                {
+                    rs.Val1 = reg[rs.src1].value;
                 }
+
                 if (b.producer == rs.Rs2 && rs.Rs2.first != -1)
                 {
                     rs.Val2 = b.value;
                     rs.Rs2.first = -1;
                     cdbRead++;
+                }else if (reg[rs.src2].producerRS.first == -1)
+                {
+                    rs.Val2 = reg[rs.src2].value;
                 }
+
                 if (b.producer == rs.dstRs && rs.dstRs.first != -1)
                 {
                     rs.dst = b.value;
                     rs.dstRs.first = -1;
                     cdbRead++;
+                }else if (reg[rs.dst].producerRS.first == -1)
+                {
+                    rs.dst = reg[rs.dst].value;
                 }
 
                 if (rs.Rs1.first == -1 && rs.Rs2.first == -1 && rs.dstRs.first == -1)
@@ -457,7 +471,6 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
-            fetchBalance--;
             if (LsRsCircled && rs.executing)
             {
                 LsRsCircled = rsIndex == Num_Rs_Ls - 1 ? false : true;
@@ -470,28 +483,30 @@ void execute(int cycles) {
         temp.op = NOP;
         ls(temp, { -1, lsType }, false); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
     }
+    if (waitingRs) fetchBalance--;
 
     rsIndex = 0;
     done = false;
-    waitingForValue = false;
     start = 0;
     cdbRead = 0;
+    waitingRs = false;
     ReservationStation aluTemp;
     for (ReservationStation& r : alu_rs)
     {
         if (AluRsCircled)
         {
+            if (lastAluExecuted == Num_Rs_Alu - 1) lastAluExecuted = -1;
             start = rsIndex <= lastAluExecuted ? 0 : Num_Rs_Alu;
         }
         else
         {
             start = Num_Rs_Alu;
         }
-        //std::cout << " ALU: " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluExecuted;
+        std::cout << " ALU: " << r.op << r.busy << r.executing << start << " LL " << AluRsCircled << " " << lastAluExecuted;
 
         if (r.busy && !r.executing && rsIndex < start) //Check if execution is already beeing executed
         {
-            waitingForValue = true;
+            if (r.op != END && r.op != V && r.op != H && r.op != I && r.op != S) waitingRs = true;
             for (CDBMessage& b : cdb)
             {
                 if (b.producer == r.Rs1 && r.Rs1.first != -1) //Check if Value is in cdb
@@ -499,12 +514,19 @@ void execute(int cycles) {
                     r.Val1 = b.value;
                     r.Rs1.first = -1;
                     cdbRead++;
+                }else if (reg[r.src1].producerRS.first == -1)
+                {
+                    r.Val1 = reg[r.src1].value;
+                    r.Rs1.first = -1;
                 }
                 if (b.producer == r.Rs2 && r.Rs2.first != -1)
                 {
                     r.Val2 = b.value;
                     r.Rs2.first = -1;
                     cdbRead++;
+                }else if (reg[r.src2].producerRS.first == -1)
+                {
+                    r.Val2 = reg[r.src2].value;
                 }
 
                 if (r.Rs1.first == -1 && r.Rs2.first == -1)
@@ -522,7 +544,13 @@ void execute(int cycles) {
                             if (ls_rs[i].busy && !ls_rs[i].executing && ls_rs[i].op != NOP ||lsDelay > 0)
                             {
                                 breaking = true;
-                                std::cout << " FIRST" << ls_rs[i].busy << ls_rs[i].executing << lsDelay;
+                            }
+                        }
+                        for (size_t i = 0; i < Num_Rs_Alu; i++)
+                        {
+                            if (alu_rs[i].busy && !alu_rs[i].executing && alu_rs[i].op != NOP && alu_rs[i].op != END || aluDelay > 0)
+                            {
+                                breaking = true;
                             }
                         }
                         for (size_t i = 0; i < sizeof(cdb) / sizeof(cdb[0]) - 1; i++)
@@ -530,7 +558,6 @@ void execute(int cycles) {
                             if (cdb[i].valid)
                             {
                                 breaking = true;
-                                std::cout << " SECOND";
                             }
                         }
                         if (breaking)
@@ -558,7 +585,6 @@ void execute(int cycles) {
         rsIndex++;
         if (done)
         {
-            fetchBalance--;
             if (AluRsCircled && r.executing)
             {
                 AluRsCircled = rsIndex == Num_Rs_Alu ? false : true;
@@ -571,6 +597,7 @@ void execute(int cycles) {
         aluTemp.op = NOP;
         alu(aluTemp, { -1, aluType }, false); //For the case that we have a RAW, this activates the WB (necessary for my implementation)
     }
+    if (waitingRs) fetchBalance--;
 
     //Counting StallCycles
     for (ReservationStation& rs : ls_rs)
@@ -580,23 +607,21 @@ void execute(int cycles) {
             stallCycles++;
         }
     }
+
+    waitingRs = false;
     for (ReservationStation& rs : alu_rs)
     {
-        std::cout << rs.op;
         if (rs.busy && !rs.executing && rs.op != H && rs.op != S && rs.op != V && rs.op != I && rs.op != END && rs.op != NOP)
         {
-            std::cout << " " << rs.op;
-            stallCycles++;           
+            stallCycles++;
         }
     }
-
 
     //I do this because my warmupphase makes its first execute in Cycle 3, which means that there could be 2 commands which are not executing. I dont want to count them as stalls
     if (fetchBalance > 0)
     {
         stallCycles -= fetchBalance;
     }
-    std::cout << "Fetchbalance: " << fetchBalance;
 
     //It is important to decrease the delay AFTER both ls and alu execution
     aluDelay--;
@@ -623,22 +648,7 @@ void writeBack() {
                 reg[rs[cdb[i].producer.first].dst].busy = true; //implemented it the wrong way (true means, the value is ready)
                 reg[rs[cdb[i].producer.first].dst].producerRS.first = -1;
             }
-            for (ReservationStation r : alu_rs)
-            {
-                if (cdb[i].producer == r.Rs1 || cdb[i].producer == r.Rs2 || cdb[i].producer == r.dstRs)
-                {
-                    waitingRs = true;
-                }
-            }
-            for (ReservationStation r : ls_rs)
-            {
-                if (cdb[i].producer == r.Rs1 || cdb[i].producer == r.Rs2 || cdb[i].producer == r.dstRs)
-                {
-                    waitingRs = true;
-                }
-            }
-
-            cdb[i].valid = waitingRs ? true : false;
+            cdb[i].valid = false;
             rs[cdb[i].producer.first].busy = false;
             rs[cdb[i].producer.first].executing = false;
         }
@@ -678,7 +688,7 @@ void decodeProgramm() {
                     prgm.append(std::string(1, line[n]));
                 }
 
-                std::cout << "prgm: " << prgm;
+                //std::cout << "prgm: " << prgm;
                 if (prgm == "S" || prgm == "s")
                 {
                     instructionQueue[lineIt].op = S;
@@ -719,9 +729,18 @@ void decodeProgramm() {
                 {
                     instructionQueue[lineIt].op = STORE;
                 }
+                else if (prgm == "NOP")
+                {
+                    instructionQueue[lineIt].op = NOP;
+                }
+                else if (prgm == "END")
+                {
+                    instructionQueue[lineIt].op = END;
+                }
                 else if (spaceCount == 0)
                 {
                     std::cout << "\nAn ERROR occured while reading programm";
+                    lineIt--;
                 }
 
                 if (spaceCount == 1)
@@ -765,7 +784,7 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
 
     while (!finished)
     {
-        std::cout << "\n\n+1 or +5 cycles? ";
+        std::cout << "\n\nEnter Cyclenumber: ";
         std::cin >> inputCycles;
         for (size_t i = 0; i < inputCycles; i++)
         {
