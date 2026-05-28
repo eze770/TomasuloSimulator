@@ -10,7 +10,7 @@
 #endif
 
 #ifndef Num_Rs_Ls
-#define Num_Rs_Ls 3
+#define Num_Rs_Ls 4
 #endif
 
 #ifndef Latency_AddSub
@@ -334,7 +334,7 @@ bool instructionFetchDecode() {
                 j++;
             }
             else {
-                if(i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP) stallCycles++;
+                //if(i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP) stallCycles++;
                 return false;
             }
         }
