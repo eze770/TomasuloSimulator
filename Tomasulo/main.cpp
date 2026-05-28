@@ -536,7 +536,7 @@ void execute(int cycles) {
                     case S: if (!autoOutput) { showRegs(); }; r.busy = false; r.executing = false; break;
                     case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles; }; r.busy = false; r.executing = false; break;
                     case V: autoOutput = true; r.busy = false; r.executing = false; break;
-                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " Structual stalls: " << fetchStallCycles << RAW prevented: " << rawPrevented; }; r.busy = false; r.executing = false; break;
+                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " Structual stalls: " << fetchStallCycles << " RAW prevented: " << rawPrevented; }; r.busy = false; r.executing = false; break;
                     case END: {
                         bool breaking{ false };
                         for (size_t i = 0; i < Num_Rs_Ls; i++)
