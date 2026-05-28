@@ -136,6 +136,7 @@ int fetchBalance{ 0 };
 int aluInstructions{ 0 };
 int lsInstructions{ 0 };
 int stallCycles{ 0 };
+int fetchStallCycles{ 0 };
 int rawPrevented{ 0 };
 bool autoOutput{ false };
 
@@ -334,7 +335,7 @@ bool instructionFetchDecode() {
                 j++;
             }
             else {
-                //if(i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP) stallCycles++;
+                if(i.op != I && i.op != H && i.op != S && i.op != V && i.op != END && i.op != NOP) fetchStallCycles++;
                 return false;
             }
         }
@@ -535,7 +536,7 @@ void execute(int cycles) {
                     case S: if (!autoOutput) { showRegs(); }; r.busy = false; r.executing = false; break;
                     case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles; }; r.busy = false; r.executing = false; break;
                     case V: autoOutput = true; r.busy = false; r.executing = false; break;
-                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented; }; r.busy = false; r.executing = false; break;
+                    case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " Structual stalls: " << fetchStallCycles << RAW prevented: " << rawPrevented; }; r.busy = false; r.executing = false; break;
                     case END: {
                         bool breaking{ false };
                         for (size_t i = 0; i < Num_Rs_Ls; i++)
@@ -810,7 +811,7 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
             {
                 showRegs();
                 std::cout << "\n\nCycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
-                    << " Stalls: " << stallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
+                    << " Stalls: " << stallCycles << " Structual stalls: " << fetchStallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
                     << 100 * (aluInstructions / double(lsInstructions + aluInstructions)) << "% Auslastung L/S: "
                     << 100 * (lsInstructions / double(lsInstructions + aluInstructions)) << "%" << std::endl;
             }           
