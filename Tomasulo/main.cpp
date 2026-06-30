@@ -133,8 +133,8 @@ bool newLsEx{ false };
 bool newAluEx{ false };
 int fetchBalance{ 0 };
 //Outputinformation:
-int aluInstructions{ 0 };
-int lsInstructions{ 0 };
+int aluCycles{ 0 }, aluInstructions{ 0 };
+int lsCycles{ 0 }, lsInstructions{ 0 };
 int stallCycles{ 0 };
 int fetchStallCycles{ 0 };
 int rawPrevented{ 0 };
@@ -174,9 +174,13 @@ void alu(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) {
             oldAluProducerRs = prodRs; //Remember it to write on it after the delay
             if (rs.op != END && rs.op != NOP)
             {
-                aluInstructions++;
+                aluCycles += aluDelay;
             }
             newAluEx = true;
+            if (rs.op != NOP && rs.op != END)
+            {
+                aluInstructions++;
+            }
         }
         else
         {
@@ -215,10 +219,14 @@ void ls(ReservationStation& rs, std::pair<int, RsType> prodRs, bool checkWb) { /
             oldLsProducerRs = prodRs;
             if (rs.op != NOP)
             {
-                lsInstructions++;
                 lsDelay = Latency_LS;
+                lsCycles += lsDelay;
             }
             newLsEx = true;
+            if (rs.op != NOP)
+            {
+                lsInstructions++;
+            }
         }
         else
         {
@@ -534,7 +542,7 @@ void execute(int cycles) {
                     switch (r.op)
                     {
                     case S: if (!autoOutput) { showRegs(); }; r.busy = false; r.executing = false; break;
-                    case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles; }; r.busy = false; r.executing = false; break;
+                    case H: if (!autoOutput) { std::cout << "Cycles: " << cycles << " IPC: " << double(lsCycles + aluCycles) / cycles; }; r.busy = false; r.executing = false; break;
                     case V: autoOutput = true; r.busy = false; r.executing = false; break;
                     case I: if (!autoOutput) { std::cout << " Stalls: " << stallCycles << " Structual stalls: " << fetchStallCycles << " RAW prevented: " << rawPrevented; }; r.busy = false; r.executing = false; break;
                     case END: {
@@ -792,6 +800,7 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
             {
                 break;
             }
+            // Warmupphase
             switch (cycles)
             {
             case 0: instructionFetchDecode(); std::cout << "\nWarmup with Fetch" << std::endl; break;
@@ -810,10 +819,11 @@ int main() { //Programm/Register während Ablauf visualisieren + mgl. rückwärtssc
             if (autoOutput)
             {
                 showRegs();
+                std::cout << "\n\n ls: " << lsInstructions << " alu: " << aluInstructions;
                 std::cout << "\n\nCycles: " << cycles << " IPC: " << double(lsInstructions + aluInstructions) / cycles
                     << " Stalls: " << stallCycles << " Structual stalls: " << fetchStallCycles << " RAW prevented: " << rawPrevented << " Auslastung ALU: "
-                    << 100 * (aluInstructions / double(lsInstructions + aluInstructions)) << "% Auslastung L/S: "
-                    << 100 * (lsInstructions / double(lsInstructions + aluInstructions)) << "%" << std::endl;
+                    << 100 * (aluCycles / double(lsCycles + aluCycles)) << "% Auslastung L/S: "
+                    << 100 * (lsCycles / double(lsCycles + aluCycles)) << "%" << std::endl;
             }           
         }
     }
